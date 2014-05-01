@@ -1,6 +1,6 @@
-\name{PACER-package}
-\alias{PACER-package}
-\alias{PACER}
+\name{PACE-package}
+\alias{PACE-package}
+\alias{PACE}
 \docType{package}
 \title{
 What the package does (short line)
@@ -12,7 +12,7 @@ More about what it does (maybe more than one line)
 }
 \details{
 \tabular{ll}{
-Package: \tab PACER\cr
+Package: \tab PACE\cr
 Type: \tab Package\cr
 Version: \tab 1.0\cr
 Date: \tab 2013-12-19\cr

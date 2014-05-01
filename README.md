@@ -1,4 +1,4 @@
-PACER
+PACE
 =====
 
 Principal Analysis by Conditional Expectation
