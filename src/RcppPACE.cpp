@@ -189,9 +189,16 @@ public:
 				design_base = design_base.cwiseProduct(d);
 			}
 			// fill the rest
+			// FIX ME
+			// for (int row = 1; row != degree + 1; row++) {
+			// 	local_x.row(i).segment(0, degree - 1) = local_x.row(i - 1).segment(1, degree - 1);
+			// }
 			for (int row = 1; row != degree + 1; row++) {
-				local_x.row(i).segment(0, degree - 1) = local_x.row(i - 1).segment(1, degree - 1);
+				for (int col = 0; col != degree; col++) {
+					local_x(row, col) = local_x(row - 1, col + 1);
+				}
 			}
+
 
 			// FIXME
 			// THIS HAT MATRIX IS ONLY FOR DEGREE 1
@@ -229,7 +236,7 @@ public:
 	MatrixXd           smtmat;
 	MatrixXd           new_weight;
 
-	Mlwls(VectorXd x, MatrixXd mat, MatrixXd weight, int degree_, int drv_) : 
+	Mlwls(VectorXd x, MatrixXd mat, MatrixXd weight, int degree_, int drv_) :
 		degree(degree_), drv(drv_) {
 		smtmat = MatrixXd::Zero(mat.cols(), mat.cols());
 		new_weight = MatrixXd::Zero(mat.cols(), mat.cols());
@@ -262,7 +269,7 @@ public:
 	};
 
 	double update(double bw_) {
-		return update(bw_, false);		
+		return update(bw_, false);
 	};
 
 	double update(double bw_, bool everything) {
@@ -314,7 +321,7 @@ public:
 
 	Qlwls(MatrixXd mat, MatrixXd weight, int neighbours) {
 		mat = mat.rowwise().reverse();
-		weight = weight.rowwise().reverse();		
+		weight = weight.rowwise().reverse();
 	};
 
 	~Qlwls() {
@@ -401,15 +408,6 @@ public:
 	MatrixXd smtcov;
 	MatrixXd cuttedsmtcov;
 	MatrixXd cuttedfitcov;
-	
-	MatrixXd *mfspline;
-	Spline2d *invmfspline;
-	std::vector<MatrixXd*> efspline;
-	std::vector<Spline2d*> invefspline;
-	std::map<double, VectorXd> invmean;
-	std::map<double, MatrixXd> invef;
-	std::map<double, MatrixXd> invfitcov;
-	std::map<double, MatrixXd> pcsolver;
 
 	double   cutp;
 	VectorXd fve;
@@ -419,21 +417,9 @@ public:
 	MatrixXd eigenfunc;
 
 	bool     error;
-	double   sigma;
 	bool     new_ridge;
+	double   sigma;
 	double   rho;
-
-	int      neighbours;
-	int      cuttedlength;
-	double   minx;
-	double   maxx;
-	double   cutminx;
-	double   cutmaxx;
-	double   gap;
-
-	Lwls     *lwls_mean;
-	Covlwls  *covlwls_cov;
-	//Qlwls    *qlwls_diag;
 
 	std::vector<Subject*> subjects;
 
@@ -447,13 +433,16 @@ public:
 
 		// set number of bins
 		if (n >= 400) {
-			b = 50;
+      b = 100;
+      //b = 50;
 		}
 		else if (n <= 100) {
-			b = 25;
+			b = 50;
+      //b = 25;
 		}
 		else {
-			b = 2.5 * sqrt(n);
+      b = 5 * sqrt(n);
+      //b = 2.5 * sqrt(n);
 		}
 		neighbours = ceil(b * cutp);
 
@@ -605,14 +594,8 @@ public:
 
 			if (invmean.find((*it)->hash) == invmean.end()) {
 				invmean[(*it)->hash] = fitmean(*it);
-			//}
-			//if (invef.find((*it)->hash) == invef.end()) {
 				invef[(*it)->hash] = fitef(*it);
-			//}
-			//if (invfitcov.find((*it)->hash) == invfitcov.end()) {
 				invfitcov[(*it)->hash] = fitcov(&invef[(*it)->hash]);
-			//}
-			//if (pcsolver.find((*it)->hash) == pcsolver.end()) {
 				MatrixXd capsigma = invfitcov[(*it)->hash];
 				capsigma.diagonal() = capsigma.diagonal().array() + sigma;
 				pcsolver[(*it)->hash] = lambda.head(c).asDiagonal() * invef[(*it)->hash] * capsigma.inverse();
@@ -620,7 +603,6 @@ public:
 		}
 
 		// update ridge
-		// not implement yet
 		// if (new_ridge) {
 		//	 update_ridge();
 		// }
@@ -630,29 +612,22 @@ public:
 			if ((*it)->hash == Infinity) {
 				continue;
 			}
-
 			(*it)->pcs = (pcsolver[(*it)->hash] *
-				          ((*it)->y.segment((*it)->cutstart, (*it)->cutend - (*it)->cutstart + 1) - 
-						   invmean[(*it)->hash])).array();
-			debugvar.push_back((*it)->pcs);
+				((*it)->y.segment((*it)->cutstart, (*it)->cutend - (*it)->cutstart + 1) -
+				invmean[(*it)->hash])).array();
 		}
-
-
 	};
 
 	~FPCA() {
 		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
 			delete *it;
 		}
-		//for (std::vector<MatrixXd*>::iterator it = efspline.begin(); it != efspline.end(); it++) {
-		//	delete *it;
-		//}
-		//for (std::vector<Spline2d*>::iterator it = invefspline.begin(); it != invefspline.end(); it++) {
-		//	delete *it;
-		//}
-		//for (std::map<double, MatrixXd*>::iterator it = invfitcov.begin(); it != invfitcov.end(); it++) {
-		//	delete it->second;
-		//}
+		for (std::vector<MatrixXd*>::iterator it = efspline.begin(); it != efspline.end(); it++) {
+			delete *it;
+		}
+		for (std::vector<Spline2d*>::iterator it = invefspline.begin(); it != invefspline.end(); it++) {
+			delete *it;
+		}
 		delete mfspline;
 		delete invmfspline;
 		delete lwls_mean;
@@ -698,7 +673,27 @@ public:
 		return subjects[i - 1];
 	};
 
+private:
+	int      neighbours;
+	int      cuttedlength;
+	double   minx;
+	double   maxx;
+	double   cutminx;
+	double   cutmaxx;
+	double   gap;
 
+	MatrixXd *mfspline;
+	Spline2d *invmfspline;
+	std::vector<MatrixXd*> efspline;
+	std::vector<Spline2d*> invefspline;
+	std::map<double, VectorXd> invmean;
+	std::map<double, MatrixXd> invef;
+	std::map<double, MatrixXd> invfitcov;
+	std::map<double, MatrixXd> pcsolver;
+
+	Lwls     *lwls_mean;
+	Covlwls  *covlwls_cov;
+	//Qlwls    *qlwls_diag;
 };
 
 RCPP_MODULE(PACE){
@@ -715,10 +710,8 @@ RCPP_MODULE(PACE){
 		.field("mean", &FPCA::mean)
 
 		.field("rawcov", &FPCA::rawcov)
-		.field("cov_weight", &FPCA::cov_weight)
 		.field("smtcov", &FPCA::smtcov)
 		.field("cuttedsmtcov", &FPCA::cuttedsmtcov)
-
 		.field("cuttedfitcov", &FPCA::cuttedfitcov)
 
 		.field("lambda", &FPCA::lambda)
@@ -727,10 +720,9 @@ RCPP_MODULE(PACE){
 
 		.field("sigma", &FPCA::sigma)
 
-		.field("biny", &FPCA::biny)
-		.field("gap", &FPCA::gap)
-
 		.field("debugvar", &FPCA::debugvar)
+    .field("biny", &FPCA::biny)
+    .field("mean_weight", &FPCA::mean_weight)
 
 		.method("index", &FPCA::index)
 		;
