@@ -88,14 +88,14 @@ double gopt(double ax, double bx, T* obj, double(T::*f) (double)) {
 	return x;
 }
 
-double trapz(VectorXd *x, VectorXd *y) {
-	int n = x->size() - 1;
-	return (x->segment(1, n) - x->segment(0, n)).cwiseProduct(y->segment(1, n) - y->segment(0, n)).sum();
+double trapz(VectorXd &x, VectorXd &y) {
+	int n = x.size() - 1;
+	return (x.segment(1, n) - x.segment(0, n)).cwiseProduct(y.segment(1, n) + y.segment(0, n)).sum() / 2;
 }
 
 // for mean, eigen func
 // also support other Xlwls
-class Lwls {
+class lwls {
 public:
 	VectorXd     grid;
 	VectorXd     output;
@@ -113,7 +113,7 @@ public:
 	double       maxbw;
 	double       gcvv;
 
-	Lwls(VectorXd x_, VectorXd y_, VectorXd w_, VectorXd grid_, int degree_, int drv_) : x(x_), y(y_), w(w_), grid(grid_), degree(degree_), drv(drv_) {
+	lwls(VectorXd x_, VectorXd y_, VectorXd w_, VectorXd grid_, int degree_, int drv_) : x(x_), y(y_), w(w_), grid(grid_), degree(degree_), drv(drv_) {
 		output = VectorXd::Zero(grid.size());
 		mean = VectorXd::Zero(grid.size());
 		new_weight = VectorXd::Zero(grid.size());
@@ -123,7 +123,7 @@ public:
 	};
 
 	void optimize() {
-		double best_gcv = gopt(minbw, maxbw, this, &Lwls::update);
+		double best_gcv = gopt(minbw, maxbw, this, &lwls::update);
 		bw = sqrt(best_gcv * minbw);
 		update(bw, true);
 	};
@@ -189,17 +189,11 @@ public:
 				design_base = design_base.cwiseProduct(d);
 			}
 			// fill the rest
-			// FIX ME
-			// for (int row = 1; row != degree + 1; row++) {
-			// 	local_x.row(i).segment(0, degree - 1) = local_x.row(i - 1).segment(1, degree - 1);
-			// }
 			for (int row = 1; row != degree + 1; row++) {
 				for (int col = 0; col != degree; col++) {
 					local_x(row, col) = local_x(row - 1, col + 1);
 				}
 			}
-
-
 			// FIXME
 			// THIS HAT MATRIX IS ONLY FOR DEGREE 1
 			////////////////////////////////////////////////////////////////////////////////////////////
@@ -217,13 +211,13 @@ public:
 		return gcvv;
 	};
 
-	~Lwls() {
+	~lwls() {
 	};
 };
 
 // support other Xlwls
 // smooth along column
-class Mlwls {
+class mlwls {
 public:
 	double             bw;
 	double             minbw;
@@ -232,39 +226,38 @@ public:
 	int                drv;
 	double             gcvv;
 	int                kernel;
-	std::vector<Lwls*> lwls;
+	std::vector<lwls*> lwlss;
 	MatrixXd           smtmat;
 	MatrixXd           new_weight;
 
-	Mlwls(VectorXd x, MatrixXd mat, MatrixXd weight, int degree_, int drv_) :
+	mlwls(VectorXd x, MatrixXd mat, MatrixXd weight, int degree_, int drv_) :
 		degree(degree_), drv(drv_) {
-		smtmat = MatrixXd::Zero(mat.cols(), mat.cols());
-		new_weight = MatrixXd::Zero(mat.cols(), mat.cols());
+		smtmat = MatrixXd::Zero(mat.rows(), mat.cols());
+		new_weight = MatrixXd::Zero(mat.rows(), mat.cols());
 		int n = mat.cols();
-		lwls = std::vector<Lwls*>(n);
-		minbw = -INFINITY;
-		maxbw = -INFINITY;
+		lwlss = std::vector<lwls*>(n);
+		minbw = (x.tail(x.size() - degree) - x.head(x.size() - degree)).maxCoeff();
+		maxbw = (x.tail(1) - x.head(1))[0] / 2;
 		for (int i = 0; i != n; i++) {
-			lwls[i] = new Lwls(x, mat.col(i), weight.col(i), x, degree, drv);
-			minbw = (minbw > lwls[i]->minbw) ? minbw : lwls[i]->minbw;
-			maxbw = (maxbw < lwls[i]->maxbw) ? lwls[i]->maxbw : maxbw;
+			lwlss[i] = new lwls(x, mat.col(i), weight.col(i), x, degree, drv);
 		}
-		try {
-			if (minbw > maxbw) {
-				throw 0;
-			}
-		}
-		catch (int) {
-			std::cout << "The input for local weighted least square is too few!" << std::endl;
-			exit(1);
-		}
+		//try {
+		//	if (minbw > maxbw) {
+		//		throw 0;
+		//	}
+		//}
+		//catch (int) {
+		//	std::cout << "The input for local weighted least square is too few!" << std::endl;
+		//	exit(1);
+		//}
 		optimize();
 	};
 
 	void optimize() {
 		double best_gcv;
-		best_gcv = gopt(minbw, maxbw, this, &Mlwls::update);
-		bw = sqrt(best_gcv * minbw);
+		best_gcv = gopt(minbw, maxbw, this, &mlwls::update);
+		// bw = sqrt(best_gcv * minbw);
+		bw = best_gcv;
 		update(bw, true);
 	};
 
@@ -275,272 +268,167 @@ public:
 	double update(double bw_, bool everything) {
 		bw = bw_;
 		gcvv = 0;
-		for (int i = 0; i != lwls.size(); i++) {
-			gcvv += lwls[i]->update(bw, everything);
+		for (int i = 0; i != lwlss.size(); i++) {
+			gcvv += lwlss[i]->update(bw, everything);
 			if (everything) {
-				smtmat.col(i) = lwls[i]->output;
-				new_weight.col(i) = lwls[i]->new_weight;
+				smtmat.col(i) = lwlss[i]->output;
+				new_weight.col(i) = lwlss[i]->new_weight;
 			}
 		}
 		return gcvv;
 	};
 
-	~Mlwls() {
-		for (std::vector<Lwls*>::iterator it = lwls.begin(); it != lwls.end(); it++) {
+	~mlwls() {
+		for (std::vector<lwls*>::iterator it = lwlss.begin(); it != lwlss.end(); it++) {
 			delete *it;
 		}
 	};
 };
 
 // for cov mat
-class Covlwls {
+class covlwls {
 public:
 	MatrixXd midmat;
 	MatrixXd midweight;
 	MatrixXd smtmat;
 
-	Covlwls(VectorXd x, MatrixXd mat, MatrixXd weight) {
-		Mlwls middle(x, mat, weight, 1, 0);
+	covlwls(VectorXd x, MatrixXd mat, MatrixXd weight) {
+		mlwls middle(x, mat, weight, 1, 0);
 		midmat = middle.smtmat.transpose();
 		midweight = middle.new_weight.transpose();
+		// midweight = weight.transpose();
 
-		Mlwls final(x, midmat, midweight, 1, 0);
+		mlwls final(x, midmat, midweight, 1, 0);
 		smtmat = (final.smtmat + final.smtmat.transpose()) / 2;
 	};
 
-	~Covlwls() {
+	~covlwls() {
 	};
 };
 
 // diagonal elements of covariance matrix
 // FIXME
 //////////////////////////////////////////////////////////
-class Qlwls {
+class qlwls {
 public:
 	VectorXd smtdiag;
 
-	Qlwls(MatrixXd mat, MatrixXd weight, int neighbours) {
+	qlwls(MatrixXd mat, MatrixXd weight, int boundary) {
 		mat = mat.rowwise().reverse();
 		weight = weight.rowwise().reverse();
 	};
 
-	~Qlwls() {
+	~qlwls() {
 	};
 };
-//////////////////////////////////////////////////////////
 
 // for partial cov mat
 // can not be used until fix hat matrix in lwls and 
 // figure out is bandwidth and so on
-// just copy from Covlwls with new degree and drv
-// class Pcovlwls {
+// just copy from covlwls with new degree and drv
+// class pcovlwls {
 // public:
 // };
 
 class Subject {
 public:
-	// speed up est raw covmat, may remove
-	// VectorXd binx;
-	// VectorXd biny;
-	// void bin() {
-	// };
-
 	VectorXd x;
 	VectorXd y;
-	int      cutstart;
-	int      cutend;
-	double   hash;
+	// VectorXd binx;
+	VectorXd biny;
+
+	bool     valid;
+	VectorXd validx;
+	VectorXd validy;
+
+	VectorXd *invmean;
+	MatrixXd *invcov;
 
 	VectorXd pcs;
 
-	Subject(VectorXd *x_, VectorXd *y_) : x(*x_), y(*y_){
-		cutstart = Infinity;
-		cutend = -Infinity;
-	};
+	// irregular only
+	VectorXd count;
 
-	void cutindex(double min, double max) {
-		for (int i = 0; i != x.size(); i++) {
-			if (x[i] >= min) {
-				cutstart = i;
-				break;
-			}
-		}
-		for (int i = x.size() - 1; i != -1; i--) {
-			if (x[i] <= max) {
-				cutend = i;
-				break;
-			}
-		}
-		if (cutstart > cutend || cutstart == Infinity || cutend == -Infinity) {
-			cutstart = Infinity;
-			cutend = -Infinity;
-		}
-		if (cutstart != Infinity && cutend != -Infinity) {
-			hash = x.segment(cutstart, cutend - cutstart + 1).array().sin().sum();
-		}
-		else {
-			hash = Infinity;
-		}
+	Subject(VectorXd &x_, VectorXd &y_) : x(x_), y(y_){
 	};
 
 	~Subject(){
+		if (invmean != NULL) {
+			delete invmean;
+			invmean = NULL;
+			delete invcov;
+			invcov = NULL;
+		}
 	};
 };
 
-class FPCA {
+class FPCAreg {
 public:
-	List     debugvar;
-
-	bool     regular;
 	int      n;            // number of subjects
 	int      b;            // number of bins
 	int      c;            // number of components
 
+	std::vector<Subject*> subjects;
+
 	VectorXd grid;
 	VectorXd cuttedgrid;
-	VectorXd biny;
+
+	VectorXd cross_sectional_mean;
 	VectorXd mean_weight;
 	VectorXd mean;
 	VectorXd cuttedmean;
 
 	MatrixXd rawcov;
 	MatrixXd cov_weight;
+	VectorXd diag_weight;
 	MatrixXd smtcov;
 	MatrixXd cuttedsmtcov;
-	MatrixXd cuttedfitcov;
-
-	double   cutp;
-	VectorXd fve;
-	double   fveth;
-	int      maxk;
 	VectorXd lambda;
 	MatrixXd eigenfunc;
+	MatrixXd cuttedfitcov;
+
+	MatrixXd pcs;
+
+	double   cutp;
+	int      boundary;
+	int      cuttedlength;
+	double   minx;
+	double   maxx;
+	double   cutminx;
+	double   cutmaxx;
+	double   gap;
+	VectorXd fve;
+	double   fveth;
+	int      posk;
+	int      maxk;
 
 	bool     error;
 	bool     new_ridge;
 	double   sigma;
 	double   rho;
 
-	std::vector<Subject*> subjects;
+	void set_smt_cov() {
+		covlwls covlwls_cov = covlwls(grid, rawcov, cov_weight);
+		smtcov = covlwls_cov.smtmat;
+		// FIXME: fix diagonal elements of covmat
+		// qlwls qlwls_diag = qlwls(rawcov, cov_weight, boundary);
+		// smtcov.diagonal() = qlwls_diag.smtdiag;
+		cuttedsmtcov = smtcov.block(boundary, boundary, cuttedlength, cuttedlength);
+	};
 
-	FPCA(List x_, List y_, double cutp_, double fveth_, int maxk_, bool error_, bool regular_) :
-		cutp(cutp_), fveth(fveth_), maxk(maxk_), error(error_), regular(regular_){
-
-		// get number of subjects
-		n = x_.size();
-
-		subjects = std::vector<Subject*>(n);
-
-		// set number of bins
-		if (n >= 400) {
-      b = 100;
-      //b = 50;
-		}
-		else if (n <= 100) {
-			b = 50;
-      //b = 25;
-		}
-		else {
-      b = 5 * sqrt(n);
-      //b = 2.5 * sqrt(n);
-		}
-		neighbours = ceil(b * cutp);
-
-		// set subjects 
-		maxx = -INFINITY;
-		minx = INFINITY;
-
-		for (int i = 0; i != n; i++) {
-			VectorXd xt = x_[i];
-			VectorXd yt = y_[i];
-			maxx = (maxx > xt.maxCoeff()) ? maxx : xt.maxCoeff();
-			minx = (minx < xt.minCoeff()) ? minx : xt.minCoeff();
-			subjects[i] = new Subject(&xt, &yt);
-			// subjects[i]->bin();
-		}
-
-		// to avoid overflow
-		maxx *= 1 + DBL_EPSILON;
-
-		// set grid
-		gap = (maxx - minx) / b;
-		grid = VectorXd::LinSpaced(b, minx + gap / 2, maxx - gap / 2);
-		cuttedlength = b - 2 * neighbours;
-		cuttedgrid = grid.segment(neighbours, cuttedlength);
-		cutminx = cuttedgrid(0);
-		cutmaxx = cuttedgrid(cuttedgrid.size() - 1);
-
-		for (int i = 0; i != n; i++) {
-			subjects[i]->cutindex(cutminx, cutmaxx);
-		}
-
-		biny = VectorXd::Zero(b);
-		mean_weight = VectorXd::Zero(b);
-
-		for (int i = 0; i != n; i++) {
-			for (int j = 0; j != subjects[i]->x.size(); j++) {
-				int index = (subjects[i]->x[j] - minx) / gap;
-				(mean_weight[index])++;
-				biny[index] += (subjects[i]->y[j] - biny[index]) / mean_weight[index];
-			}
-		}
-
-		// get mean
-		lwls_mean = new Lwls(grid, biny, mean_weight, grid, 1, 0);
-		lwls_mean->optimize();
-		mean = lwls_mean->output;
-		cuttedmean = mean.segment(neighbours, cuttedlength);
-
-		// get rawcov
-		// no binning for estimating raw cov matrix
-		cov_weight = MatrixXd::Zero(b, b);
-		rawcov = MatrixXd::Zero(b, b);
-		for (int i = 0; i != n; i++) {
-			int m = subjects[i]->x.size();
-			for (int j = 0; j != m; j++) {
-				int index_j = (subjects[i]->x[j] - minx) / gap;
-				for (int k = j; k != m; k++) {
-					int index_k = (subjects[i]->x[k] - minx) / gap;
-					cov_weight(index_j, index_k)++;
-					rawcov(index_j, index_k) += ((subjects[i]->y[j] - mean[index_j]) * (subjects[i]->y[k] - mean[index_k]) - rawcov(index_j, index_k)) / cov_weight(index_j, index_k);
-				}
-			}
-		}
-
-		cov_weight = cov_weight + cov_weight.transpose();
-		// cov_weight.diagonal() = cov_weight.diagonal() / 2;
-		VectorXd oricov_weight = cov_weight.diagonal().segment(neighbours, cuttedlength) / 2;
-		cov_weight.diagonal() *= 0;
-		rawcov = rawcov + rawcov.transpose();
-		rawcov.diagonal() = rawcov.diagonal() / 2;
-
-		// get smtcov
-		covlwls_cov = new Covlwls(grid, rawcov, cov_weight);
-		smtcov = covlwls_cov->smtmat;
-
-		/*
-		  TODO: Weight? Before eigen or after? Number of nbs?
-		  fix smtcov diag with qdiag
-		  */
-		// qlwls_diag = new Qlwls(rawcov, cov_weight, neighbours);
-		// smtcov.diagonal() = qlwls_diag->smtdiag;
-
-		cuttedsmtcov = smtcov.block(neighbours, neighbours, cuttedlength, cuttedlength);
-
-		// eigen decomposition target cov matrix
+	void set_eigen() {
+		// eigen decomposition
 		SelfAdjointEigenSolver<MatrixXd> eigendcp(cuttedsmtcov);
 		lambda = eigendcp.eigenvalues().reverse();
-		int posk = 0;
+		posk = 0;
 		double lambdasum = (lambda.sum() + lambda.cwiseAbs().sum()) / 2;
 		for (int i = 0; i != lambda.size(); i++) {
 			if (lambda[i] / lambdasum > LAMBDA_THRESHOLD) {
 				posk++;
 			}
 		}
-		lambda = lambda.head(posk) * gap;
-		eigenfunc = eigendcp.eigenvectors().rowwise().reverse().leftCols(posk) / sqrt(gap);
-
-		// choose number of components (at least 2)
+		lambda = eigendcp.eigenvalues().reverse().head(posk) * gap;
+		// choose number of components
 		c = 2;
 		fve = lambda / lambda.sum();
 		for (int i = 1; i != fve.size(); i++) {
@@ -550,181 +438,455 @@ public:
 			}
 		}
 		c = c > maxk ? maxk : c;
+		// set eigen value and eigen function
+		lambda = eigendcp.eigenvalues().reverse().head(c) * gap;
+		eigenfunc = eigendcp.eigenvectors().rowwise().reverse().leftCols(c) / sqrt(gap);
+	};
 
-		// fit cov matrix for group
-		cuttedfitcov = MatrixXd::Zero(cuttedlength, cuttedlength);
+	void set_fit_cov() {
+		cuttedfitcov.setZero(cuttedlength, cuttedlength);
 		for (int i = 0; i != c; i++) {
-			cuttedfitcov += lambda[i] * (eigenfunc.col(i) * eigenfunc.col(i).transpose());
-		}
-
-		// est sigma
-		Lwls covdiag = Lwls(cuttedgrid, rawcov.diagonal().segment(neighbours, cuttedlength), oricov_weight, cuttedgrid, 1, 0);
-		covdiag.optimize();
-		VectorXd vare = covdiag.output - cuttedsmtcov.diagonal();
-		sigma = trapz(&cuttedgrid, &vare) / (cuttedgrid[cuttedlength - 1] - cuttedgrid[0]);
-		sigma = sigma > 0 ? sigma : 0;
-
-		//// construct spline for mean function
-		mfspline = new MatrixXd;
-		mfspline->resize(2, cuttedlength);
-		mfspline->row(0) = cuttedgrid;
-		mfspline->row(1) = cuttedmean;
-		invmfspline = new Spline2d;
-		(*invmfspline) = SplineFitting<Spline2d>::Interpolate((*mfspline), 3);
-
-		// construct spline for eigen function
-		efspline.resize(c);
-		invefspline.resize(c);
-		for (int i = 0; i != c; i++) {
-			efspline[i] = new MatrixXd;
-			efspline[i]->resize(2, cuttedlength);
-			efspline[i]->row(0) = cuttedgrid;
-			efspline[i]->row(1) = eigenfunc.col(i).transpose();
-			invefspline[i] = new Spline2d;
-			*(invefspline[i]) = SplineFitting<Spline2d>::Interpolate(*(efspline[i]), 3);
-		}
-
-		// fit mean, 
-		// fit eigen function, 
-		// fit cov matrix,
-		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
-			if ((*it)->hash == Infinity) {
-				continue;
-			}
-
-			if (invmean.find((*it)->hash) == invmean.end()) {
-				invmean[(*it)->hash] = fitmean(*it);
-				invef[(*it)->hash] = fitef(*it);
-				invfitcov[(*it)->hash] = fitcov(&invef[(*it)->hash]);
-				MatrixXd capsigma = invfitcov[(*it)->hash];
-				capsigma.diagonal() = capsigma.diagonal().array() + sigma;
-				pcsolver[(*it)->hash] = lambda.head(c).asDiagonal() * invef[(*it)->hash] * capsigma.inverse();
-			}
-		}
-
-		// update ridge
-		// if (new_ridge) {
-		//	 update_ridge();
-		// }
-
-		// estimate pc scroe
-		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
-			if ((*it)->hash == Infinity) {
-				continue;
-			}
-			(*it)->pcs = (pcsolver[(*it)->hash] *
-				((*it)->y.segment((*it)->cutstart, (*it)->cutend - (*it)->cutstart + 1) -
-				invmean[(*it)->hash])).array();
+			cuttedfitcov += lambda[i] * eigenfunc.col(i) * eigenfunc.col(i).transpose();
 		}
 	};
 
-	~FPCA() {
+	void set_sigma() {
+		lwls covdiag = lwls(cuttedgrid, rawcov.diagonal().segment(boundary, cuttedlength), diag_weight.segment(boundary, cuttedlength), cuttedgrid, 1, 0);
+		covdiag.optimize();
+		VectorXd vare = covdiag.output - cuttedsmtcov.diagonal();
+		sigma = trapz(cuttedgrid, vare) / (cuttedgrid[cuttedlength - 1] - cuttedgrid[0]);
+		sigma = sigma > 0 ? sigma : 0;
+	};
+
+	void fpca() {
+		set_mean();
+		set_raw_cov();
+		set_smt_cov();
+		set_eigen();
+		set_fit_cov();
+		if (error) {
+			set_sigma();
+		}
+		else {
+			sigma = 0;
+		}
+		update_ridge();
+		set_score();
+	};
+
+	FPCAreg(List x_, List y_, double cutp_, double fveth_, int maxk_, bool error_) :
+		cutp(cutp_), fveth(fveth_), maxk(maxk_), error(error_) {
+		grid = x_[0];                          // for regular case
+		n = x_.size();                         // get number of subjects
+		subjects = std::vector<Subject*>(n);   // initial subject points
+		set_bin_no();                          // set number of bins
+		set_subjects(x_, y_);                  // set subjects 
+		maxx *= 1 + DBL_EPSILON;               // to avoid overflow
+		set_grids();
+		cut_subjects();
+		set_csm();
+		fpca();
+	};
+
+	~FPCAreg() {
 		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
 			delete *it;
 		}
-		for (std::vector<MatrixXd*>::iterator it = efspline.begin(); it != efspline.end(); it++) {
-			delete *it;
+	};
+
+	void set_bin_no() {
+		b = grid.size();
+	};
+
+	void set_subjects(List &x_, List &y_){
+		maxx = grid.maxCoeff();
+		minx = grid.minCoeff();
+		for (int i = 0; i != n; i++) {
+			VectorXd yt = y_[i];
+			subjects[i] = new Subject(grid, yt);
 		}
-		for (std::vector<Spline2d*>::iterator it = invefspline.begin(); it != invefspline.end(); it++) {
-			delete *it;
+	};
+
+	void set_grids() {
+		gap = (maxx - minx) / (b - 1);
+		boundary = ceil(b * cutp);
+		cuttedlength = b - 2 * boundary;
+		cuttedgrid = grid.segment(boundary, cuttedlength);
+		cutminx = cuttedgrid.minCoeff();
+		cutmaxx = cuttedgrid.maxCoeff();
+	};
+
+	void cut_subject(Subject &s) {
+		// s.binx = s.x;
+		s.biny = s.y;
+		s.valid = true;
+	};
+
+	void cut_subjects() {
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			cut_subject(**it);
 		}
-		delete mfspline;
-		delete invmfspline;
-		delete lwls_mean;
-		delete covlwls_cov;
-		//delete qlwls_diag;
+	};
+
+	void set_csm() { //set cross sectional mean
+		cross_sectional_mean = VectorXd::Zero(b);
+		mean_weight = VectorXd::Constant(b, n);
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			cross_sectional_mean += (*it)->y;
+		}
+		cross_sectional_mean /= n;
+	};
+
+	void set_mean() {
+		mean = cross_sectional_mean;
+	};
+
+	void set_raw_cov() {
+		rawcov.setZero(b, b);
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			rawcov += ((*it)->y - mean) * ((*it)->y - mean).transpose();
+		}
+		rawcov /= n;
+		cov_weight.setConstant(b, b, n);
+		diag_weight.setConstant(b, n);
+		if (error) {
+			cov_weight.diagonal().setZero();
+		}
 	};
 
 	void update_ridge() {
+		// TODO
+		rho = sigma;
 	};
 
-	VectorXd fitline(Subject *it, Spline2d *s) {
-		int size = it->cutend - it->cutstart + 1;
-		VectorXd ans;
-		ans.setZero(size);
-		for (int i = 0; i != size; i++) {
-			double w = it->x(it->cutstart + i);
-			ans(i) = (*s)((w - cutminx) / (cutmaxx - cutminx))(1);
-		}
-		return ans;
+	void set_score() {
+		// 
 	};
+};
 
-	VectorXd fitmean(Subject *it) {
-		return fitline(it, invmfspline);
-	};
+class FPCAirreg {
+public:
+	int      n;            // number of subjects
+	int      b;            // number of bins
+	int      c;            // number of components
 
-	MatrixXd fitef(Subject *it) {
-		MatrixXd ans = MatrixXd::Zero(c, it->cutend - it->cutstart + 1);
-		for (int i = 0; i != c; i++) {
-			ans.row(i) = fitline(it, invefspline[i]);
-		}
-		return ans;
-	};
+	std::vector<Subject*> subjects;
 
-	MatrixXd fitcov(MatrixXd *it) {
-		MatrixXd ans = MatrixXd::Zero(it->cols(), it->cols());
-		for (int i = 0; i != it->rows(); i++) {
-			ans += it->row(i).transpose() * it->row(i);
-		}
-		return ans;
-	};
+	VectorXd grid;
+	VectorXd cuttedgrid;
 
-	Subject *index(int i) {
-		return subjects[i - 1];
-	};
+	VectorXd cross_sectional_mean;
+	VectorXd mean_weight;
+	VectorXd mean;
+	VectorXd cuttedmean;
 
-private:
-	int      neighbours;
+	MatrixXd rawcov;
+	MatrixXd cov_weight;
+	VectorXd diag_weight;
+	MatrixXd smtcov;
+	MatrixXd cuttedsmtcov;
+	VectorXd lambda;
+	MatrixXd eigenfunc;
+	MatrixXd cuttedfitcov;
+
+	MatrixXd pcs;
+
+	double   cutp;
+	int      boundary;
 	int      cuttedlength;
 	double   minx;
 	double   maxx;
 	double   cutminx;
 	double   cutmaxx;
 	double   gap;
+	VectorXd fve;
+	double   fveth;
+	int      posk;
+	int      maxk;
 
-	MatrixXd *mfspline;
-	Spline2d *invmfspline;
-	std::vector<MatrixXd*> efspline;
-	std::vector<Spline2d*> invefspline;
-	std::map<double, VectorXd> invmean;
-	std::map<double, MatrixXd> invef;
-	std::map<double, MatrixXd> invfitcov;
-	std::map<double, MatrixXd> pcsolver;
+	bool     error;
+	bool     new_ridge;
+	double   sigma;
+	double   rho;
 
-	Lwls     *lwls_mean;
-	Covlwls  *covlwls_cov;
-	//Qlwls    *qlwls_diag;
+	void set_smt_cov() {
+		covlwls covlwls_cov = covlwls(grid, rawcov, cov_weight);
+		smtcov = covlwls_cov.smtmat;
+		// FIXME: fix diagonal elements of covmat
+		// qlwls qlwls_diag = qlwls(rawcov, cov_weight, boundary);
+		// smtcov.diagonal() = qlwls_diag.smtdiag;
+		cuttedsmtcov = smtcov.block(boundary, boundary, cuttedlength, cuttedlength);
+	};
+
+	void set_eigen() {
+		// eigen decomposition
+		SelfAdjointEigenSolver<MatrixXd> eigendcp(cuttedsmtcov);
+		lambda = eigendcp.eigenvalues().reverse();
+		posk = 0;
+		double lambdasum = (lambda.sum() + lambda.cwiseAbs().sum()) / 2;
+		for (int i = 0; i != lambda.size(); i++) {
+			if (lambda[i] / lambdasum > LAMBDA_THRESHOLD) {
+				posk++;
+			}
+		}
+		lambda = eigendcp.eigenvalues().reverse().head(posk) * gap;
+		// choose number of components
+		c = 2;
+		fve = lambda / lambda.sum();
+		for (int i = 1; i != fve.size(); i++) {
+			fve[i] += fve[i - 1];
+			if (fve[i] < fveth) {
+				c = i + 2;
+			}
+		}
+		c = c > maxk ? maxk : c;
+		// set eigen value and eigen function
+		lambda = eigendcp.eigenvalues().reverse().head(c) * gap;
+		eigenfunc = eigendcp.eigenvectors().rowwise().reverse().leftCols(c) / sqrt(gap);
+	};
+
+	void set_fit_cov() {
+		cuttedfitcov.setZero(cuttedlength, cuttedlength);
+		for (int i = 0; i != c; i++) {
+			cuttedfitcov += lambda[i] * eigenfunc.col(i) * eigenfunc.col(i).transpose();
+		}
+	};
+
+	void set_sigma() {
+		lwls covdiag = lwls(cuttedgrid, rawcov.diagonal().segment(boundary, cuttedlength), diag_weight.segment(boundary, cuttedlength), cuttedgrid, 1, 0);
+		covdiag.optimize();
+		VectorXd vare = covdiag.output - cuttedsmtcov.diagonal();
+		sigma = trapz(cuttedgrid, vare) / (cuttedgrid[cuttedlength - 1] - cuttedgrid[0]);
+		sigma = sigma > 0 ? sigma : 0;
+	};
+
+	void fpca() {
+		set_mean();
+		set_raw_cov();
+		set_smt_cov();
+		set_eigen();
+		set_fit_cov();
+		if (error) {
+			set_sigma();
+		}
+		else {
+			sigma = 0;
+		}
+		update_ridge();
+		set_score();
+	};
+
+	FPCAirreg(List x_, List y_, double cutp_, double fveth_, int maxk_, bool error_) :
+		cutp(cutp_), fveth(fveth_), maxk(maxk_), error(error_) {
+		// grid = x_[0];                          // for regular case
+		n = x_.size();                         // get number of subjects
+		subjects = std::vector<Subject*>(n);   // initial subject points
+		set_bin_no();                          // set number of bins
+		set_subjects(x_, y_);                  // set subjects 
+		maxx *= 1 + DBL_EPSILON;               // to avoid overflow
+		set_grids();
+		cut_subjects();
+		set_csm();
+		fpca();
+	};
+
+	~FPCAirreg() {
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			delete *it;
+		}
+	};
+
+	void set_bin_no() {
+		if (n >= 400) {
+			b = 100;
+		}
+		else if (n <= 100) {
+			b = 50;
+		}
+		else {
+			b = 5 * sqrt(n);
+		}
+	};
+
+	void set_subjects(List &x_, List &y_){
+		for (int i = 0; i != n; i++) {
+			VectorXd xt = x_[i];
+			VectorXd yt = y_[i];
+			if (i == 0) {
+				maxx = xt.maxCoeff();
+				minx = xt.minCoeff();
+			}
+			maxx = maxx > xt.maxCoeff() ? maxx : xt.maxCoeff();
+			minx = minx < xt.minCoeff() ? minx : xt.minCoeff();
+			subjects[i] = new Subject(xt, yt);
+		}
+	};
+
+	void set_grids() {
+		gap = (maxx - minx) / b;
+		boundary = ceil(b * cutp);
+		cuttedlength = b - 2 * boundary;
+		grid = VectorXd::LinSpaced(b, minx + gap / 2, maxx - gap / 2);
+		cuttedgrid = grid.segment(boundary, cuttedlength);
+		cutminx = cuttedgrid.minCoeff();
+		cutmaxx = cuttedgrid.maxCoeff();
+	};
+
+	void cut_subject(Subject &s) {
+		s.count.setZero(b);
+		s.biny.setZero(b);
+		// s.binx = s.x;
+		for (int i = 0; i != s.x.size(); i++) {
+			int ii = (s.x[i] - minx) / gap;
+			s.count[ii]++;
+			s.biny[ii] += s.y[i];
+		}
+		for (int i = 0; i != b; i++) {
+			if (s.count[i] != 0) {
+				s.biny[i] /= s.count[i];
+			}
+		}
+		s.valid = s.count.segment(boundary, cuttedlength).sum() > 0;
+	};
+
+	void cut_subjects() {
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			cut_subject(**it);
+		}
+	};
+
+	void set_csm() { //set cross sectional mean
+		cross_sectional_mean = VectorXd::Zero(b);
+		mean_weight = VectorXd::Zero(b);
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			cross_sectional_mean += (*it)->biny;
+			mean_weight = mean_weight + (*it)->count;
+		}
+		cross_sectional_mean = cross_sectional_mean.cwiseQuotient(mean_weight);
+		for (int i = 0; i != b; i++) {
+			if (mean_weight[i] == 0) {
+				cross_sectional_mean[i] = 0;
+			}
+		}
+	};
+
+	void set_mean() {
+		// mean = cross_sectional_mean;
+		lwls lwls_mean = lwls(grid, cross_sectional_mean, mean_weight, grid, 1, 0);
+		lwls_mean.optimize();
+		mean = lwls_mean.output;
+	};
+
+	void set_raw_cov() {
+		rawcov.setZero(b, b);
+		cov_weight.setZero(b, b);
+		double ei, ej;
+		for (std::vector<Subject*>::iterator it = subjects.begin(); it != subjects.end(); it++) {
+			for (int i = 0; i != b; i++) {
+				if ((*it)->count[i] != 0) {
+					for (int j = i; j != b; j++) {
+						if ((*it)->count[j] != 0) {
+							ei = (*it)->biny[i] - mean[i];
+							ej = (*it)->biny[j] - mean[j];
+							rawcov(i, j) += ei * ej;
+							rawcov(j, i) += ei * ej;
+							cov_weight(i, j)++;
+							cov_weight(j, i)++;
+						}
+					}
+				}
+			}
+		}
+		rawcov.diagonal() /= 2;
+		cov_weight.diagonal() /= 2;
+		diag_weight = cov_weight.diagonal();
+		for (int i = 0; i != b; i++) {
+			for (int j = 0; j != b; j++) {
+				if (cov_weight(i, j) >= 1) {
+					rawcov(i, j) /= cov_weight(i, j);
+				}
+			}
+		}
+		if (error) {
+			cov_weight.diagonal().setZero();
+		}
+	};
+
+	void update_ridge() {
+		// TODO
+		rho = sigma;
+	};
+
+	void set_score() {
+		// 
+	};
 };
 
-RCPP_MODULE(PACE){
+
+RCPP_MODULE(FPCA){
 	using namespace Rcpp;
 
-	class_<FPCA>("FPCA")
-		.constructor<List, List, double, double, int, bool, bool>()
+	class_<FPCAreg>("FPCAreg")
+		.constructor<List, List, double, double, int, bool>()
+		.field("n", &FPCAreg::n)
+		.field("b", &FPCAreg::b)
+		.field("c", &FPCAreg::c)
+		.field("gap", &FPCAreg::gap)
 
-		.field("n", &FPCA::n)
-		.field("b", &FPCA::b)
-		.field("c", &FPCA::c)
+		.field("grid", &FPCAreg::grid)
+		.field("cuttedgrid", &FPCAreg::cuttedgrid)
 
-		.field("grid", &FPCA::grid)
-		.field("mean", &FPCA::mean)
+		.field("cross_sectional_mean", &FPCAreg::cross_sectional_mean)
+		.field("mean", &FPCAreg::mean)
 
-		.field("rawcov", &FPCA::rawcov)
-		.field("smtcov", &FPCA::smtcov)
-		.field("cuttedsmtcov", &FPCA::cuttedsmtcov)
-		.field("cuttedfitcov", &FPCA::cuttedfitcov)
+		.field("rawcov", &FPCAreg::rawcov)
+		.field("smtcov", &FPCAreg::smtcov)
+		.field("cuttedsmtcov", &FPCAreg::cuttedsmtcov)
+		.field("cuttedfitcov", &FPCAreg::cuttedfitcov)
 
-		.field("lambda", &FPCA::lambda)
-		.field("eigenfunc", &FPCA::eigenfunc)
-		.field("fve", &FPCA::fve)
+		.field("lambda", &FPCAreg::lambda)
+		.field("eigenfunc", &FPCAreg::eigenfunc)
 
-		.field("sigma", &FPCA::sigma)
+		.field("sigma", &FPCAreg::sigma)
 
-		.field("debugvar", &FPCA::debugvar)
-    .field("biny", &FPCA::biny)
-    .field("mean_weight", &FPCA::mean_weight)
-
-		.method("index", &FPCA::index)
 		;
+
+	class_<FPCAirreg>("FPCAirreg")
+		.constructor<List, List, double, double, int, bool>()
+		.field("n", &FPCAirreg::n)
+		.field("b", &FPCAirreg::b)
+		.field("c", &FPCAirreg::c)
+		.field("gap", &FPCAirreg::gap)
+		
+		.field("grid", &FPCAirreg::grid)
+		.field("cuttedgrid", &FPCAirreg::cuttedgrid)
+
+		.field("cross_sectional_mean", &FPCAirreg::cross_sectional_mean)
+		.field("mean", &FPCAirreg::mean)
+
+		.field("rawcov", &FPCAirreg::rawcov)
+		.field("cov_weight", &FPCAirreg::cov_weight)
+		.field("smtcov", &FPCAirreg::smtcov)
+		.field("cuttedsmtcov", &FPCAirreg::cuttedsmtcov)
+		.field("cuttedfitcov", &FPCAirreg::cuttedfitcov)
+
+		.field("lambda", &FPCAirreg::lambda)
+		.field("eigenfunc", &FPCAirreg::eigenfunc)
+
+		.field("sigma", &FPCAirreg::sigma)
+
+		;
+
+	class_<lwls>("lwls")
+		.constructor<VectorXd, VectorXd, VectorXd, VectorXd, int, int>()
+		.field("x", &lwls::x)
+		.field("y", &lwls::y)
+		.field("w", &lwls::w)
+		.field("grid", &lwls::grid)
+		.field("output", &lwls::output)
+		.field("new_weight", &lwls::new_weight)
+		.method("optimize", &lwls::optimize)
+		;
+
 }
 

@@ -9,4 +9,4 @@ Description: PACE is a versatile package that provides implementation of various
 License: GPL
 Depends: R (>= 3.0.0), Rcpp, RcppEigen
 LinkingTo: Rcpp, RcppEigen
-RcppModules: PACE
+RcppModules: FPCA

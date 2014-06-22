@@ -1,2 +1,3 @@
 useDynLib(PACE)
-export(FPCA)
+export(FPCAreg)
+export(FPCAirreg)
