@@ -1,7 +1,7 @@
 // must enable EIGEN2_SUPPORT otherwise we can't return MatrixXd in some case
 // should be removed after they fix this problem
 // http://lists.r-forge.r-project.org/pipermail/rcpp-devel/2012-May/003792.html
-// public everything for debug
+// commoned variable name in parentheses is the old name in matlab version
 
 #define EIGEN2_SUPPORT
 #define GAUSSIAN_MULT 0.3989422804014326779399460599343818684758586311649346
@@ -13,6 +13,12 @@
 using namespace Rcpp;
 using namespace Eigen;
 
+// Generic Optimize Function for Class
+// ax:  lower bound
+// bx:  upper bound
+// obj: pointer to the object
+// f:   pointer to the method(function) which need optimize
+//      input is a double(e.g.:bandwidth), output is a double(e.g.:gcv)
 template<class T>
 double gopt(double ax, double bx, T* obj, double(T::*f) (double)) {
 	const double c = (3. - sqrt(5.)) * .5;
@@ -88,6 +94,8 @@ double gopt(double ax, double bx, T* obj, double(T::*f) (double)) {
 	return x;
 }
 
+// Trapezoidal Numerical Integration
+// Integration for f(x) = y
 double trapz(VectorXd &x, VectorXd &y) {
 	int n = x.size() - 1;
 	return (x.segment(1, n) - x.segment(0, n)).cwiseProduct(y.segment(1, n) + y.segment(0, n)).sum() / 2;
@@ -97,21 +105,21 @@ double trapz(VectorXd &x, VectorXd &y) {
 // also support other Xlwls
 class lwls {
 public:
-	VectorXd     grid;
-	VectorXd     output;
-	VectorXd     new_weight;
-	VectorXd     x;
-	VectorXd     y;
-	VectorXd     w;
-	VectorXd     mean;
-	VectorXd     hat;
-	int          degree;
-	int          drv;
-	double       h;
-	double       bw;
-	double       minbw;
-	double       maxbw;
-	double       gcvv;
+	VectorXd     grid;        // output grid (xou in lwls.m)
+	VectorXd     output;      // output value (mu in lwls.m)
+	VectorXd     new_weight;  // new weight for 2d smoothing, may not useful depends on smoothing method
+	VectorXd     x;           // input grid (xin in lwls.m)
+	VectorXd     y;           // input grid (yin in lwls.m)
+	VectorXd     w;           // input grid (win in lwls.m)
+	VectorXd     mean;        // output mean, for gcv
+	VectorXd     hat;         // diag of hat matrix, for gcv
+	int          degree;      // degree of polynomial (npoly in lwls.m)
+	int          drv;         // order of derivative (nder in lwls.m)
+	double       h;           // mean of diag of hat matrix, for gcv
+	double       bw;          // bandwidth (bw in lwls.m)
+	double       minbw;       // minimum bandwidth
+	double       maxbw;       // maximum bandwidth
+	double       gcvv;        // GCV value
 
 	lwls(VectorXd x_, VectorXd y_, VectorXd w_, VectorXd grid_, int degree_, int drv_) : x(x_), y(y_), w(w_), grid(grid_), degree(degree_), drv(drv_) {
 		output = VectorXd::Zero(grid.size());
@@ -124,14 +132,17 @@ public:
 
 	void optimize() {
 		double best_gcv = gopt(minbw, maxbw, this, &lwls::update);
-		bw = sqrt(best_gcv * minbw);
+		bw = sqrt(best_gcv * minbw);  // using geometric mean for bandwidth
 		update(bw, true);
 	};
 
+	// overload update with one agreement so we can apply gopt
 	double update(double bw_) {
 		return update(bw_, false);
 	};
 
+	// refer to 3rd ppt from Cong
+	// if everything is true, then also output the new weight for smoothing on second direction
 	double update(double bw_, bool everything){
 		VectorXd true_grid(grid);
 		if (!everything) {
@@ -194,16 +205,14 @@ public:
 					local_x(row, col) = local_x(row - 1, col + 1);
 				}
 			}
-			// FIXME
-			// THIS HAT MATRIX IS ONLY FOR DEGREE 1
-			////////////////////////////////////////////////////////////////////////////////////////////
+			// FIXME: THIS HAT MATRIX IS ONLY FOR DEGREE 1
 			hat[i] = w[i] * local_x(1, 1) / (local_x(0, 0)*local_x(1, 1) - local_x(0, 1)*local_x(1, 0));
-			////////////////////////////////////////////////////////////////////////////////////////////
+
 			local_ans = local_x.jacobiSvd(ComputeThinU | ComputeThinV).solve(local_respond);
 			mean[i] = local_ans[0];
 			output[i] = local_ans[drv];
 		}
-		h = hat.mean();
+		h = hat.mean(); // GCV method, remove this line if use CV
 		gcvv = (y - mean).array().square().sum() / (1 - 2 * h + h * h);
 		if (!everything) {
 			grid = true_grid;
@@ -241,23 +250,15 @@ public:
 		for (int i = 0; i != n; i++) {
 			lwlss[i] = new lwls(x, mat.col(i), weight.col(i), x, degree, drv);
 		}
-		//try {
-		//	if (minbw > maxbw) {
-		//		throw 0;
-		//	}
-		//}
-		//catch (int) {
-		//	std::cout << "The input for local weighted least square is too few!" << std::endl;
-		//	exit(1);
-		//}
 		optimize();
 	};
 
 	void optimize() {
 		double best_gcv;
 		best_gcv = gopt(minbw, maxbw, this, &mlwls::update);
-		// bw = sqrt(best_gcv * minbw);
-		bw = best_gcv;
+		// bw = best_gcv;  // GCV
+        // bw = minbw;     // bin grid
+        bw = sqrt(best_gcv * minbw);  // geo mean
 		update(bw, true);
 	};
 
@@ -323,13 +324,14 @@ public:
 };
 
 // for partial cov mat
-// can not be used until fix hat matrix in lwls and 
+// can not be used until fix hat matrix in lwls and
 // figure out is bandwidth and so on
 // just copy from covlwls with new degree and drv
 // class pcovlwls {
 // public:
 // };
 
+// class for individual subject
 class Subject {
 public:
 	VectorXd x;
@@ -337,14 +339,14 @@ public:
 	// VectorXd binx;
 	VectorXd biny;
 
-	bool     valid;
+	bool     valid;  // if it has no observation in cutted domain, then valid is false
 	VectorXd validx;
 	VectorXd validy;
 
-	VectorXd *invmean;
-	MatrixXd *invcov;
+	VectorXd *invmean; // pointer to its fitted mean
+	MatrixXd *invcov;  // pointer to its fitted cov matrix
 
-	VectorXd pcs;
+	VectorXd pcs; // pc scores
 
 	// irregular only
 	VectorXd count;
@@ -480,7 +482,7 @@ public:
 		n = x_.size();                         // get number of subjects
 		subjects = std::vector<Subject*>(n);   // initial subject points
 		set_bin_no();                          // set number of bins
-		set_subjects(x_, y_);                  // set subjects 
+		set_subjects(x_, y_);                  // set subjects
 		maxx *= 1 + DBL_EPSILON;               // to avoid overflow
 		set_grids();
 		cut_subjects();
@@ -560,7 +562,7 @@ public:
 	};
 
 	void set_score() {
-		// 
+		//
 	};
 };
 
@@ -682,7 +684,7 @@ public:
 		n = x_.size();                         // get number of subjects
 		subjects = std::vector<Subject*>(n);   // initial subject points
 		set_bin_no();                          // set number of bins
-		set_subjects(x_, y_);                  // set subjects 
+		set_subjects(x_, y_);                  // set subjects
 		maxx *= 1 + DBL_EPSILON;               // to avoid overflow
 		set_grids();
 		cut_subjects();
@@ -771,10 +773,10 @@ public:
 	};
 
 	void set_mean() {
-		// mean = cross_sectional_mean;
-		lwls lwls_mean = lwls(grid, cross_sectional_mean, mean_weight, grid, 1, 0);
-		lwls_mean.optimize();
-		mean = lwls_mean.output;
+		mean = cross_sectional_mean;
+		// lwls lwls_mean = lwls(grid, cross_sectional_mean, mean_weight, grid, 1, 0);
+		// lwls_mean.optimize();
+		// mean = lwls_mean.output;
 	};
 
 	void set_raw_cov() {
@@ -818,7 +820,7 @@ public:
 	};
 
 	void set_score() {
-		// 
+		//
 	};
 };
 
@@ -857,7 +859,7 @@ RCPP_MODULE(FPCA){
 		.field("b", &FPCAirreg::b)
 		.field("c", &FPCAirreg::c)
 		.field("gap", &FPCAirreg::gap)
-		
+
 		.field("grid", &FPCAirreg::grid)
 		.field("cuttedgrid", &FPCAirreg::cuttedgrid)
 
