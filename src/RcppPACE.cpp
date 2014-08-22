@@ -372,42 +372,42 @@ public:
 
 	std::vector<Subject*> subjects;
 
-	VectorXd grid;
-	VectorXd cuttedgrid;
+	VectorXd grid;                  // (uncutted out21 in PCA.m)
+	VectorXd cuttedgrid;            // (cutted out21 in PCA.m)
 
 	VectorXd cross_sectional_mean;
 	VectorXd mean_weight;
-	VectorXd mean;
-	VectorXd cuttedmean;
+	VectorXd mean;                  // mean function
+	VectorXd cuttedmean;            // cutted mean function
 
-	MatrixXd rawcov;
-	MatrixXd cov_weight;
-	VectorXd diag_weight;
-	MatrixXd smtcov;
-	MatrixXd cuttedsmtcov;
-	VectorXd lambda;
-	MatrixXd eigenfunc;
-	MatrixXd cuttedfitcov;
+	MatrixXd rawcov;                // raw covariance matrix
+	MatrixXd cov_weight;            // weight for elements in covariance matrix
+	VectorXd diag_weight;           // diagonal of covariance matrix
+	MatrixXd smtcov;                // smoothed covariance matrix
+	MatrixXd cuttedsmtcov;          // cutted smoothed covariance matrix
+	VectorXd lambda;                // lambda
+	MatrixXd eigenfunc;             // eigen function (by column)
+	MatrixXd cuttedfitcov;          // cutted fitted covariance matrix
 
-	MatrixXd pcs;
+	MatrixXd pcs;                   // pc scores (TODO)
 
-	double   cutp;
-	int      boundary;
-	int      cuttedlength;
+	double   cutp;                  // cut off percentage, signle tail
+	int      boundary;              // number of cut off elements
+	int      cuttedlength;          // number of rest elements after cut off
 	double   minx;
 	double   maxx;
 	double   cutminx;
 	double   cutmaxx;
-	double   gap;
-	VectorXd fve;
-	double   fveth;
+	double   gap;                   // gap between grid
+	VectorXd fve;                   // cumulative fve
+	double   fveth;                 // fve need for components selection
 	int      posk;
-	int      maxk;
+	int      maxk;                  // (maxk in PCA.m)
 
-	bool     error;
-	bool     new_ridge;
-	double   sigma;
-	double   rho;
+	bool     error;                 // additional measurement error is assumed (error in PCA.m)
+	bool     new_ridge;             // use non-randomized leave-one-measurement-out CV approach to find the optimal value of rho (TODO) (rho == 'cv' in PCA.m)
+	double   sigma;                 // estimate of measurement error variance (sigma in PCA.m)
+	double   rho;                   // (rho_opt in PCA.m)
 
 	void set_smt_cov() {
 		covlwls covlwls_cov = covlwls(grid, rawcov, cov_weight);
